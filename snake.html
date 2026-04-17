@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Snake Game</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      font-family: 'Arial', sans-serif;
+    }
+    canvas {
+      border: 8px solid #fff;
+      background: #1a1a2e;
+      display: block;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game" width="600" height="600"></canvas>
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width;
+    const H = canvas.height;
+
+    // Game constants
+    const GRID_SIZE = 20;
+    const CELL_SIZE = W / GRID_SIZE;
+    const BASE_SPEED = 100;
+
+    // Game states
+    const STATE = { MENU: 0, PLAYING: 1, GAME_OVER: 2 };
+    let state = STATE.MENU;
+
+    // Game variables
+    let snake = [];
+    let food = {};
+    let direction = { x: 1, y: 0 };
+    let nextDirection = { x: 1, y: 0 };
+    let score = 0;
+    let gameSpeed = BASE_SPEED;
+    let lastMoveTime = 0;
+    let particles = [];
+    let lastT = 0;
+
+    // Utility functions
+    const rng = (lo, hi) => lo + Math.random() * (hi - lo);
+    const rngI = (n) => Math.floor(Math.random() * n);
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+    // Particle system
+    function spawnParticles(x, y, col, n = 12) {
+      for (let i = 0; i < n; i++) {
+        const angle = (i / n) * Math.PI * 2 + rng(-0.4, 0.4);
+        const speed = rng(80, 160);
+        particles.push({
+          x: x + 0.5,
+          y: y + 0.5,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 0.6,
+          maxLife: 0.6,
+          col: col,
+          r: rng(2, 5)
+        });
+      }
+    }
+
+    // Initialize game
+    function reset() {
+      snake = [
+        { x: 10, y: 10 },
+        { x: 9, y: 10 },
+        { x: 8, y: 10 }
+      ];
+      direction = { x: 1, y: 0 };
+      nextDirection = { x: 1, y: 0 };
+      score = 0;
+      gameSpeed = BASE_SPEED;
+      lastMoveTime = 0;
+      particles = [];
+      spawnFood();
+    }
+
+    // Spawn food at random location
+    function spawnFood() {
+      let validFood = false;
+      while (!validFood) {
+        food = { x: rngI(GRID_SIZE), y: rngI(GRID_SIZE) };
+        validFood = !snake.some(seg => seg.x === food.x && seg.y === food.y);
+      }
+    }
+
+    // Keyboard input
+    const keys = {};
+    window.addEventListener('keydown', e => {
+      keys[e.code] = true;
+
+      if (state === STATE.MENU && e.code === 'Enter') {
+        state = STATE.PLAYING;
+        reset();
+        e.preventDefault();
+      }
+
+      if (state === STATE.PLAYING) {
+        // Direction change with buffering
+        if (e.code === 'ArrowUp' || e.code === 'KeyW') {
+          if (direction.y === 0) nextDirection = { x: 0, y: -1 };
+          e.preventDefault();
+        }
+        if (e.code === 'ArrowDown' || e.code === 'KeyS') {
+          if (direction.y === 0) nextDirection = { x: 0, y: 1 };
+          e.preventDefault();
+        }
+        if (e.code === 'ArrowLeft' || e.code === 'KeyA') {
+          if (direction.x === 0) nextDirection = { x: -1, y: 0 };
+          e.preventDefault();
+        }
+        if (e.code === 'ArrowRight' || e.code === 'KeyD') {
+          if (direction.x === 0) nextDirection = { x: 1, y: 0 };
+          e.preventDefault();
+        }
+      }
+
+      if (state === STATE.GAME_OVER && e.code === 'Enter') {
+        state = STATE.MENU;
+        e.preventDefault();
+      }
+    });
+
+    window.addEventListener('keyup', e => {
+      keys[e.code] = false;
+    });
+
+    // Game update
+    function update(now) {
+      if (lastT === 0) lastT = now;
+      const dt = (now - lastT) / 1000;
+      lastT = now;
+
+      if (state !== STATE.PLAYING) return;
+
+      // Update particles
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vy += 150 * dt; // gravity
+        p.life -= dt;
+        if (p.life <= 0) particles.splice(i, 1);
+      }
+
+      // Snake movement
+      if (now - lastMoveTime >= gameSpeed) {
+        lastMoveTime = now;
+
+        // Apply next direction
+        direction = { ...nextDirection };
+
+        // Calculate new head
+        const head = snake[0];
+        const newHead = {
+          x: (head.x + direction.x + GRID_SIZE) % GRID_SIZE,
+          y: (head.y + direction.y + GRID_SIZE) % GRID_SIZE
+        };
+
+        // Check self-collision
+        for (let seg of snake) {
+          if (newHead.x === seg.x && newHead.y === seg.y) {
+            state = STATE.GAME_OVER;
+            return;
+          }
+        }
+
+        // Move snake
+        snake.unshift(newHead);
+
+        // Check food collision
+        if (newHead.x === food.x && newHead.y === food.y) {
+          score++;
+          spawnParticles(food.x + 0.5, food.y + 0.5, '#FFD700', 15);
+          spawnFood();
+          // Increase speed slightly
+          gameSpeed = Math.max(50, BASE_SPEED - score * 1.5);
+        } else {
+          // Move tail
+          snake.pop();
+        }
+      }
+    }
+
+    // Game draw
+    function draw(now) {
+      // Clear canvas with gradient background
+      const gradient = ctx.createLinearGradient(0, 0, W, H);
+      gradient.addColorStop(0, '#0f3460');
+      gradient.addColorStop(1, '#16213e');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, W, H);
+
+      // Draw grid
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= GRID_SIZE; i++) {
+        const pos = i * CELL_SIZE;
+        ctx.beginPath();
+        ctx.moveTo(pos, 0);
+        ctx.lineTo(pos, H);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, pos);
+        ctx.lineTo(W, pos);
+        ctx.stroke();
+      }
+
+      if (state === STATE.MENU) {
+        drawMenu();
+      } else if (state === STATE.PLAYING) {
+        drawGame();
+      } else if (state === STATE.GAME_OVER) {
+        drawGame();
+        drawGameOver();
+      }
+    }
+
+    function drawMenu() {
+      // Semi-transparent overlay
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+      ctx.fillRect(0, 0, W, H);
+
+      // Title
+      ctx.fillStyle = '#00FF88';
+      ctx.font = 'bold 72px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('SNAKE', W / 2, H / 2 - 120);
+
+      // Instructions
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = '20px Arial';
+      ctx.fillText('Arrow Keys or WASD to Move', W / 2, H / 2 - 20);
+      ctx.fillText('Eat Apples to Grow', W / 2, H / 2 + 20);
+      ctx.fillText('Don\'t Hit Yourself or Walls', W / 2, H / 2 + 60);
+
+      // Start button
+      ctx.fillStyle = '#FF6B6B';
+      ctx.font = 'bold 32px Arial';
+      ctx.fillText('Press ENTER to Start', W / 2, H / 2 + 130);
+    }
+
+    function drawGame() {
+      // Draw food
+      const fx = food.x * CELL_SIZE + CELL_SIZE / 2;
+      const fy = food.y * CELL_SIZE + CELL_SIZE / 2;
+
+      // Apple with glow
+      ctx.shadowColor = '#FFD700';
+      ctx.shadowBlur = 15;
+      ctx.fillStyle = '#FF6B6B';
+      ctx.beginPath();
+      ctx.arc(fx, fy, CELL_SIZE * 0.35, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Draw snake
+      for (let i = 0; i < snake.length; i++) {
+        const seg = snake[i];
+        const x = seg.x * CELL_SIZE + CELL_SIZE / 2;
+        const y = seg.y * CELL_SIZE + CELL_SIZE / 2;
+        const size = CELL_SIZE * 0.4;
+
+        // Head is brighter
+        if (i === 0) {
+          ctx.fillStyle = '#00FF88';
+          ctx.shadowColor = '#00FF88';
+          ctx.shadowBlur = 10;
+        } else {
+          // Gradient for body
+          const intensity = Math.max(0.5, 1 - i / (snake.length * 1.5));
+          ctx.fillStyle = `rgba(0, 255, 136, ${intensity})`;
+          ctx.shadowColor = 'rgba(0, 255, 136, 0.5)';
+          ctx.shadowBlur = 5;
+        }
+
+        ctx.beginPath();
+        ctx.roundRect(x - size, y - size, size * 2, size * 2, size * 0.3);
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+
+      // Draw particles
+      for (let p of particles) {
+        ctx.globalAlpha = p.life / p.maxLife;
+        ctx.fillStyle = p.col;
+        ctx.beginPath();
+        ctx.arc(p.x * CELL_SIZE, p.y * CELL_SIZE, p.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
+      // Draw HUD
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = 'bold 20px Arial';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(`Score: ${score}`, 15, 15);
+      ctx.fillText(`Length: ${snake.length}`, 15, 40);
+    }
+
+    function drawGameOver() {
+      // Semi-transparent overlay
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+      ctx.fillRect(0, 0, W, H);
+
+      // Game over text
+      ctx.fillStyle = '#FF6B6B';
+      ctx.font = 'bold 64px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('GAME OVER', W / 2, H / 2 - 80);
+
+      // Score display
+      ctx.fillStyle = '#FFD700';
+      ctx.font = 'bold 40px Arial';
+      ctx.fillText(`Score: ${score}`, W / 2, H / 2 + 20);
+
+      // Length display
+      ctx.fillStyle = '#00FF88';
+      ctx.font = '24px Arial';
+      ctx.fillText(`Snake Length: ${snake.length}`, W / 2, H / 2 + 70);
+
+      // Restart instruction
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = '20px Arial';
+      ctx.fillText('Press ENTER to Return to Menu', W / 2, H / 2 + 130);
+    }
+
+    // Main game loop
+    function loop(now) {
+      update(now);
+      draw(now);
+      requestAnimationFrame(loop);
+    }
+
+    // Polyfill for roundRect (older browsers)
+    if (!CanvasRenderingContext2D.prototype.roundRect) {
+      CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+        if (w < 2 * r) r = w / 2;
+        if (h < 2 * r) r = h / 2;
+        this.beginPath();
+        this.moveTo(x + r, y);
+        this.arcTo(x + w, y, x + w, y + h, r);
+        this.arcTo(x + w, y + h, x, y + h, r);
+        this.arcTo(x, y + h, x, y, r);
+        this.arcTo(x, y, x + w, y, r);
+        this.closePath();
+        return this;
+      };
+    }
+
+    // Start game
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
