@@ -48,11 +48,25 @@ Single `<script>` block, 800×600 `<canvas>`, no external assets. All sprites dr
 
 ## Git / GitHub Workflow
 
-Every meaningful change should be committed and pushed:
+Remote: `https://github.com/ranadera/retro-blaster` (branch: `main`)
+
+**Claude must commit and push after every meaningful unit of work** — a feature added, a bug fixed, a tuning pass done. Never leave completed work uncommitted. This ensures the project can always be reverted to a known-good state.
+
+Commit cadence:
+- After each discrete change (new feature, bug fix, balance tweak), commit and push immediately.
+- Do not batch unrelated changes into one commit.
+- If a task involves multiple steps, commit at each stable checkpoint, not just at the end.
+
+Commit message format — imperative, lowercase, specific:
 ```
-git add -p                        # stage relevant hunks
-git commit -m "short description"
-git push
+add shield power-up with 3-second invulnerability
+fix runner enemies passing through canvas boundary
+increase tank HP from 3 to 5 on levels 5-6
 ```
 
-Remote: `https://github.com/ranadera/retro-blaster` (branch: `main`)
+Push after every commit:
+```
+git add <files>
+git commit -m "description"
+git push
+```
