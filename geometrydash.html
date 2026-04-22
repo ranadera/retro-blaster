@@ -29,7 +29,7 @@
 </head>
 <body>
 <canvas id="g"></canvas>
-<div class="hint" id="hint">space / click / ↑ to jump · R restart</div>
+<div class="hint" id="hint">space / click / ↑ to jump · R restart · 5 landings = 1 booster jump</div>
 <script>
 const canvas = document.getElementById('g');
 const ctx = canvas.getContext('2d');
@@ -43,6 +43,8 @@ const GROUND = H - 100;
 const RUN = 320;
 const GRAV = 2400;
 const JUMP = -620;
+const JUMP_BOOST = -920;
+const BOOST_LANDINGS = 5;
 const P = { x: 220, y: 0, vy: 0, r: 14, rot: 0, onGround: true };
 const half = () => P.r * 1.35;
 
@@ -52,6 +54,9 @@ let best = 0;
 let particles = [];
 let shake = 0;
 let pulse = 0;
+let jumpCharge = 0;
+let boosterReady = false;
+let prevGrounded = true;
 
 // World obstacles: x is world distance from level start (dist increases = player moves right)
 const LEVEL = [];
@@ -104,6 +109,9 @@ function resetPlay() {
   P.onGround = true;
   particles = [];
   shake = 0;
+  jumpCharge = 0;
+  boosterReady = false;
+  prevGrounded = true;
   runNum++;
   buildLevel();
 }
@@ -159,7 +167,14 @@ function aabbHit(A, B) {
 function tryJump() {
   if (state !== S.PLAY) return;
   if (P.onGround) {
-    P.vy = JUMP;
+    if (boosterReady) {
+      P.vy = JUMP_BOOST;
+      boosterReady = false;
+      burst(P.x, P.y + 8, '#ffe066', 16);
+      burst(P.x + 6, P.y + 14, '#7ef9ff', 10);
+    } else {
+      P.vy = JUMP;
+    }
     P.onGround = false;
   }
 }
@@ -248,11 +263,21 @@ function update(dt) {
   if (shake > 0) shake *= 0.88;
 
   if (state === S.PLAY) {
+    const wasGrounded = prevGrounded;
     dist += RUN * dt;
     P.vy += GRAV * dt;
     P.y += P.vy * dt;
     P.rot += (P.onGround ? 8 : 5) * dt * (RUN * 0.01);
     collide();
+    if (P.onGround && !wasGrounded) {
+      jumpCharge++;
+      if (jumpCharge >= BOOST_LANDINGS) {
+        boosterReady = true;
+        jumpCharge = 0;
+        burst(P.x, P.y - 6, '#ffe066', 14);
+      }
+    }
+    prevGrounded = P.onGround;
   }
 
   for (let i = particles.length - 1; i >= 0; i--) {
@@ -343,6 +368,17 @@ function drawPlayer() {
   ctx.save();
   ctx.translate(P.x, P.y);
   ctx.rotate(P.rot);
+  if (boosterReady && state === S.PLAY) {
+    ctx.fillStyle = 'rgba(255, 200, 80, 0.45)';
+    ctx.beginPath();
+    ctx.moveTo(-P.r - 10, P.r * 0.2);
+    ctx.lineTo(-P.r - 22, P.r * 0.55);
+    ctx.lineTo(-P.r - 10, P.r * 0.9);
+    ctx.fill();
+    ctx.strokeStyle = '#ffe066';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
   const hue = (pulse * 30) % 360;
   ctx.fillStyle = `hsl(${hue}, 95%, 62%)`;
   ctx.strokeStyle = '#fff';
@@ -375,6 +411,16 @@ function drawUI() {
   ctx.font = '14px system-ui';
   ctx.fillStyle = 'rgba(180,220,255,0.7)';
   ctx.fillText(`best ${best}  ·  run #${runNum}`, 24, 56);
+  if (state === S.PLAY) {
+    ctx.font = '14px system-ui';
+    if (boosterReady) {
+      ctx.fillStyle = '#ffe066';
+      ctx.fillText('booster: ready — next jump is MEGA', 24, 78);
+    } else {
+      ctx.fillStyle = 'rgba(180,220,255,0.85)';
+      ctx.fillText(`booster: ${jumpCharge}/${BOOST_LANDINGS} landings`, 24, 78);
+    }
+  }
 
   if (state === S.MENU) {
     ctx.textAlign = 'center';
@@ -389,6 +435,7 @@ function drawUI() {
     ctx.fillStyle = 'rgba(220,240,255,0.85)';
     ctx.fillText('press space or click to start', W / 2, H / 2 + 10);
     ctx.fillText('avoid pink spikes · ride purple pads', W / 2, H / 2 + 38);
+    ctx.fillText('every 5 safe landings charges one mega-jump booster', W / 2, H / 2 + 66);
   }
   if (state === S.DEAD) {
     ctx.textAlign = 'center';
