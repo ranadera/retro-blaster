@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vibe Dash</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a12;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    overflow: hidden;
+    font-family: system-ui, sans-serif;
+  }
+  canvas { display: block; image-rendering: pixelated; }
+  .hint {
+    position: fixed;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #6cf;
+    font-size: 13px;
+    opacity: 0.75;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="g"></canvas>
+<div class="hint" id="hint">space / click / ↑ to jump · R restart</div>
+<script>
+const canvas = document.getElementById('g');
+const ctx = canvas.getContext('2d');
+const W = 900, H = 520;
+canvas.width = W; canvas.height = H;
+
+const S = { MENU: 0, PLAY: 1, DEAD: 2 };
+let state = S.MENU;
+
+const GROUND = H - 100;
+const RUN = 320;
+const GRAV = 2400;
+const JUMP = -620;
+const P = { x: 220, y: 0, vy: 0, r: 14, rot: 0, onGround: true };
+const half = () => P.r * 1.35;
+
+let dist = 0;
+let runNum = 0;
+let best = 0;
+let particles = [];
+let shake = 0;
+let pulse = 0;
+
+// World obstacles: x is world distance from level start (dist increases = player moves right)
+const LEVEL = [];
+function addBlock(x, w, h, top) {
+  LEVEL.push({ kind: 'block', x, w, h, top });
+}
+function addSpike(x, w) {
+  LEVEL.push({ kind: 'spike', x, w });
+}
+function addPad(x) {
+  LEVEL.push({ kind: 'pad', x });
+}
+
+function buildLevel() {
+  LEVEL.length = 0;
+  let x = 400;
+  const gap = () => 220 + Math.random() * 140;
+  for (let wave = 0; wave < 80; wave++) {
+    const roll = Math.random();
+    if (roll < 0.35) {
+      addSpike(x, 28 + Math.random() * 18);
+      x += gap();
+    } else if (roll < 0.55) {
+      const w = 70 + Math.random() * 90;
+      addBlock(x, w, 22 + Math.random() * 16, GROUND - 22 - Math.random() * 16);
+      x += w + gap() * 0.55;
+    } else if (roll < 0.7) {
+      addSpike(x, 24);
+      addSpike(x + 52, 24);
+      addSpike(x + 104, 24);
+      x += 200 + gap();
+    } else if (roll < 0.82) {
+      addBlock(x, 50, 120, GROUND - 120);
+      addSpike(x + 58, 30);
+      x += 120 + gap();
+    } else {
+      addPad(x);
+      x += 280 + Math.random() * 120;
+    }
+  }
+  addSpike(x + 400, 40);
+}
+
+function resetPlay() {
+  dist = 0;
+  P.x = 220;
+  P.y = GROUND - half();
+  P.vy = 0;
+  P.rot = 0;
+  P.onGround = true;
+  particles = [];
+  shake = 0;
+  runNum++;
+  buildLevel();
+}
+
+function burst(x, y, col, n = 24) {
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + Math.random() * 0.4;
+    const s = 120 + Math.random() * 280;
+    particles.push({
+      x, y,
+      vx: Math.cos(a) * s,
+      vy: Math.sin(a) * s,
+      life: 0.45 + Math.random() * 0.35,
+      max: 0.55,
+      col,
+      sz: 3 + Math.random() * 5
+    });
+  }
+}
+
+function worldToScreen(wx) {
+  return wx - dist + P.x;
+}
+
+function playerRect() {
+  const s = half();
+  return { l: P.x - s, t: P.y - s, r: P.x + s, b: P.y + s };
+}
+
+function triSpike(screenX, w) {
+  const baseY = GROUND;
+  return [
+    { x: screenX, y: baseY },
+    { x: screenX + w / 2, y: baseY - w * 0.85 },
+    { x: screenX + w, y: baseY }
+  ];
+}
+
+function pointInTri(px, py, tri) {
+  const [a, b, c] = tri;
+  const area = (x1,y1,x2,y2,x3,y3) => Math.abs((x1*(y2-y3)+x2*(y3-y1)+x3*(y1-y2))/2);
+  const A = area(a.x,a.y,b.x,b.y,c.x,c.y);
+  const A1 = area(px,py,b.x,b.y,c.x,c.y);
+  const A2 = area(a.x,a.y,px,py,c.x,c.y);
+  const A3 = area(a.x,a.y,b.x,b.y,px,py);
+  return Math.abs(A - (A1+A2+A3)) < 2;
+}
+
+function aabbHit(A, B) {
+  return A.l < B.r && A.r > B.l && A.t < B.b && A.b > B.t;
+}
+
+function tryJump() {
+  if (state !== S.PLAY) return;
+  if (P.onGround) {
+    P.vy = JUMP;
+    P.onGround = false;
+  }
+}
+
+function die() {
+  if (state !== S.PLAY) return;
+  state = S.DEAD;
+  shake = 12;
+  burst(P.x, P.y, '#7ef9ff', 32);
+  burst(P.x, P.y, '#ff6b9d', 18);
+  best = Math.max(best, Math.floor(dist));
+}
+
+function collide() {
+  const pr = playerRect();
+  if (P.y > GROUND + 40) { die(); return; }
+
+  P.onGround = false;
+  const h = half();
+  let groundY = GROUND - h;
+
+  for (const o of LEVEL) {
+    const sx = worldToScreen(o.x);
+    if (sx < -80 || sx > W + 80) continue;
+
+    if (o.kind === 'block') {
+      const top = o.top;
+      const bl = { l: sx, t: top, r: sx + o.w, b: top + o.h };
+      if (aabbHit(pr, bl)) {
+        if (P.vy >= 0 && pr.b >= bl.t - 8 && pr.b <= bl.t + 28 && pr.r > bl.l + 2 && pr.l < bl.r - 2) {
+          groundY = Math.min(groundY, bl.t - h);
+          P.onGround = true;
+        } else if (P.vy < 0 && pr.t <= bl.b && pr.b > bl.t + 8) {
+          P.y = bl.b + h + 1;
+          P.vy = 0;
+        } else {
+          die();
+          return;
+        }
+      }
+    }
+    if (o.kind === 'spike') {
+      const tri = triSpike(sx, o.w);
+      const cx = (tri[0].x + tri[1].x + tri[2].x) / 3;
+      const cy = (tri[0].y + tri[1].y + tri[2].y) / 3;
+      const samples = [
+        [P.x, P.y],
+        [pr.l + 4, pr.t + 4], [pr.r - 4, pr.t + 4],
+        [pr.l + 4, pr.b - 4], [pr.r - 4, pr.b - 4]
+      ];
+      for (const [px, py] of samples) {
+        if (pointInTri(px, py, tri) || Math.hypot(px - cx, py - cy) < o.w * 0.35) {
+          die();
+          return;
+        }
+      }
+    }
+    if (o.kind === 'pad') {
+      const pad = { l: sx - 6, t: GROUND - 14, r: sx + 46, b: GROUND };
+      if (aabbHit(pr, pad) && P.vy >= 0) {
+        P.vy = JUMP * 1.15;
+        P.onGround = false;
+        burst(sx + 20, GROUND - 6, '#b388ff', 10);
+      }
+    }
+  }
+
+  if (P.y >= groundY - 0.01) {
+    P.y = groundY;
+    P.vy = 0;
+    P.onGround = true;
+  }
+}
+
+let lastT = 0;
+function loop(now) {
+  const dt = Math.min(0.033, (now - lastT) / 1000) || 0.016;
+  lastT = now;
+  update(dt, now);
+  draw(now);
+  requestAnimationFrame(loop);
+}
+
+function update(dt) {
+  pulse += dt * 3;
+  if (shake > 0) shake *= 0.88;
+
+  if (state === S.PLAY) {
+    dist += RUN * dt;
+    P.vy += GRAV * dt;
+    P.y += P.vy * dt;
+    P.rot += (P.onGround ? 8 : 5) * dt * (RUN * 0.01);
+    collide();
+  }
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life -= dt;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 400 * dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawGrid() {
+  const off = (dist * 0.15) % 40;
+  ctx.strokeStyle = 'rgba(100, 200, 255, 0.08)';
+  ctx.lineWidth = 1;
+  for (let x = -off; x < W + 40; x += 40) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, H);
+    ctx.stroke();
+  }
+  for (let y = 0; y < H; y += 40) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(W, y);
+    ctx.stroke();
+  }
+}
+
+function drawGround() {
+  const gGrad = ctx.createLinearGradient(0, GROUND - 4, 0, H);
+  gGrad.addColorStop(0, '#1a1a3a');
+  gGrad.addColorStop(1, '#0d0d18');
+  ctx.fillStyle = gGrad;
+  ctx.fillRect(0, GROUND - 4, W, H - GROUND + 4);
+  ctx.strokeStyle = '#6cf';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(0, GROUND);
+  ctx.lineTo(W, GROUND);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(124, 249, 255, 0.12)';
+  for (let i = 0; i < 30; i++) {
+    const wx = dist * 1.2 + i * 80;
+    const sx = (wx % (W + 160)) - 40;
+    ctx.fillRect(sx, GROUND + 6 + (i % 3) * 4, 50, 3);
+  }
+}
+
+function drawObstacles() {
+  for (const o of LEVEL) {
+    const sx = worldToScreen(o.x);
+    if (sx < -100 || sx > W + 100) continue;
+
+    if (o.kind === 'spike') {
+      const tri = triSpike(sx, o.w);
+      ctx.fillStyle = '#ff5e9a';
+      ctx.strokeStyle = '#ffc2d8';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(tri[0].x, tri[0].y);
+      ctx.lineTo(tri[1].x, tri[1].y);
+      ctx.lineTo(tri[2].x, tri[2].y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+    if (o.kind === 'block') {
+      ctx.fillStyle = '#3d5a80';
+      ctx.strokeStyle = '#7ef9ff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(sx + 0.5, o.top + 0.5, o.w - 1, o.h - 1);
+      ctx.fillRect(sx, o.top, o.w, o.h);
+      ctx.fillStyle = 'rgba(255,255,255,0.06)';
+      ctx.fillRect(sx + 4, o.top + 4, o.w - 8, o.h * 0.25);
+    }
+    if (o.kind === 'pad') {
+      ctx.fillStyle = '#9b72cf';
+      ctx.fillRect(sx, GROUND - 12, 40, 12);
+      ctx.fillStyle = '#e0c3fc';
+      ctx.fillRect(sx + 6, GROUND - 10, 28, 4);
+    }
+  }
+}
+
+function drawPlayer() {
+  ctx.save();
+  ctx.translate(P.x, P.y);
+  ctx.rotate(P.rot);
+  const hue = (pulse * 30) % 360;
+  ctx.fillStyle = `hsl(${hue}, 95%, 62%)`;
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 3;
+  const s = P.r;
+  ctx.fillRect(-s, -s, s * 2, s * 2);
+  ctx.strokeRect(-s + 1.5, -s + 1.5, s * 2 - 3, s * 2 - 3);
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.fillRect(-s + 4, -s + 4, s * 2 - 14, s * 2 - 14);
+  ctx.restore();
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    const a = p.life / p.max;
+    ctx.globalAlpha = Math.max(0, a);
+    ctx.fillStyle = p.col;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.sz * a, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawUI() {
+  ctx.font = 'bold 22px system-ui, sans-serif';
+  ctx.fillStyle = '#9df';
+  ctx.textAlign = 'left';
+  ctx.fillText(`${Math.floor(dist)} m`, 24, 36);
+  ctx.font = '14px system-ui';
+  ctx.fillStyle = 'rgba(180,220,255,0.7)';
+  ctx.fillText(`best ${best}  ·  run #${runNum}`, 24, 56);
+
+  if (state === S.MENU) {
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 42px system-ui';
+    const g = ctx.createLinearGradient(W/2 - 160, 0, W/2 + 160, 0);
+    g.addColorStop(0, '#7ef9ff');
+    g.addColorStop(0.5, '#ff6b9d');
+    g.addColorStop(1, '#ffe066');
+    ctx.fillStyle = g;
+    ctx.fillText('VIBE DASH', W / 2, H / 2 - 40);
+    ctx.font = '18px system-ui';
+    ctx.fillStyle = 'rgba(220,240,255,0.85)';
+    ctx.fillText('press space or click to start', W / 2, H / 2 + 10);
+    ctx.fillText('avoid pink spikes · ride purple pads', W / 2, H / 2 + 38);
+  }
+  if (state === S.DEAD) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(10,8,20,0.65)';
+    ctx.fillRect(W / 2 - 200, H / 2 - 70, 400, 120);
+    ctx.strokeStyle = '#ff6b9d';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(W / 2 - 200, H / 2 - 70, 400, 120);
+    ctx.font = 'bold 28px system-ui';
+    ctx.fillStyle = '#ffb3cc';
+    ctx.fillText('wrecked', W / 2, H / 2 - 28);
+    ctx.font = '16px system-ui';
+    ctx.fillStyle = '#cde';
+    ctx.fillText(`you hit ${Math.floor(dist)} m · space / R to go again`, W / 2, H / 2 + 8);
+  }
+}
+
+function draw() {
+  ctx.save();
+  if (shake > 0.5) {
+    ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+  }
+  ctx.fillStyle = '#080818';
+  ctx.fillRect(0, 0, W, H);
+  drawGrid();
+  drawGround();
+  drawObstacles();
+  if (state !== S.MENU) drawPlayer();
+  drawParticles();
+  drawUI();
+  ctx.restore();
+}
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowUp') {
+    e.preventDefault();
+    if (state === S.MENU) {
+      state = S.PLAY;
+      resetPlay();
+    } else if (state === S.PLAY) tryJump();
+    else if (state === S.DEAD) {
+      state = S.PLAY;
+      resetPlay();
+    }
+  }
+  if (e.code === 'KeyR') {
+    if (state === S.PLAY || state === S.DEAD) {
+      state = S.PLAY;
+      resetPlay();
+    }
+  }
+});
+
+canvas.addEventListener('mousedown', () => {
+  if (state === S.MENU) {
+    state = S.PLAY;
+    resetPlay();
+  } else if (state === S.PLAY) tryJump();
+  else if (state === S.DEAD) {
+    state = S.PLAY;
+    resetPlay();
+  }
+});
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

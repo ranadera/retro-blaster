@@ -8,6 +8,7 @@ No build step — open directly in a browser:
 ```
 open shooter.html
 open tictactoe.html
+open geometrydash.html
 ```
 
 All logic, styles, and markup live in a single self-contained HTML file per game. There are no dependencies, bundlers, or package managers.
@@ -16,6 +17,7 @@ All logic, styles, and markup live in a single self-contained HTML file per game
 
 - `shooter.html` — Retro Blaster: 6-level top-down shooter
 - `tictactoe.html` — Tic Tac Toe with 2-player and vs-CPU (minimax) modes
+- `geometrydash.html` — Vibe Dash: auto-runner, jump over spikes, procedural platforms/pads
 
 ## shooter.html Architecture
 
